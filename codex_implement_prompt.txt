@@ -1,0 +1,38 @@
+You are tasked with completing the implementation of the "Deep Dry-Run Learning System" for the Charon trading bot.
+
+Phase 1 (Schema & Infrastructure) and Phase 2 (Snapshot Engine) are already COMPLETED.
+The database schema (`ghost_tracking_jobs`, `ghost_snapshots`, `position_outcomes`, `learning_patterns`) is in place.
+The snapshot fetching and scheduling (`src/learning/ghost.js`) is in place.
+The DB helpers (`src/db/ghost.js`) are in place.
+
+Your task is to implement the remaining phases exactly as described in `implementation_plan.md` and mark them as done in `task.md` when finished.
+
+REQUIRED TASKS:
+
+1. Phase 3: Classification
+- Create `src/learning/classify.js`
+- Implement `classifyDuePositions()` which checks `getPositionsReadyForClassification()` and generates outcomes based on multi-dimensional tags.
+- Compute Entry Score (0-100) and Exit Score (0-100).
+- Assign `primary_outcome` based on precedence rules.
+- Insert the outcome using `insertPositionOutcome`.
+
+2. Phase 4: Patterns & Review
+- Create `src/learning/patterns.js` to detect patterns if enough data is classified. Include counterfactual exit simulation.
+- Create `src/learning/review.js` with `runAutoReview()`.
+- Extend `src/learning/summary.js` to include ghost stats.
+- Extend `src/learning/report.js` to show ghost outcomes in Telegram reports.
+- Extend `src/learning/lessons.js` to use `LLM_LESSON_MODEL` and store new metadata.
+
+3. Phase 5: LLM Feedback & Commands
+- Modify `src/pipeline/llm.js` to filter `activeLessonsForPrompt()` correctly (use confidence >= 0.7, non-expired, matching strategy, limit 4).
+- Modify `src/telegram/commands.js` to add `/ghost <id>`, `/review`, `/patterns`, and `/suggest`.
+- Modify `src/app.js` to add the `runAutoReview` interval (using `AUTO_REVIEW_MS`).
+
+CONSTRAINTS & RULES:
+- Read `codex_review.md` and `implementation_plan.md` carefully to understand the guardrails.
+- Use the existing `db` connection.
+- Follow the codebase's ES module syntax (`import`/`export`).
+- DO NOT break existing functionality. Extend gracefully.
+- After completing all tasks, update `task.md` to check off the remaining items.
+
+Work methodically. You have full workspace write access.

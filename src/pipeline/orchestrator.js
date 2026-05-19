@@ -1,6 +1,6 @@
 import { now, pruneSeen } from '../utils.js';
-import { numSetting, boolSetting } from '../db/settings.js';
-import { upsertCandidate, updateCandidateStatus, recentEligibleCandidates, candidateById } from '../db/candidates.js';
+import { numSetting, boolSetting, allActiveStrategies } from '../db/settings.js';
+import { upsertCandidate, updateCandidateStatus, updateCandidateSnapshot, recentEligibleCandidates, candidateById } from '../db/candidates.js';
 import { storeDecision, storeBatchDecision, logDecisionEvent } from '../db/decisions.js';
 import { buildCandidate, filterCandidate, signalLabel } from './candidateBuilder.js';
 import { decideCandidateBatch } from './llm.js';
@@ -23,6 +23,11 @@ setDegenHandler(maybeProcessDegenCandidate);
 setCandidateHandler(processCandidateFromSignals);
 
 export async function processCandidateFromSignals(signals) {
+  if (tradingMode() === 'dry_run') {
+    await processDryRunCandidateFromSignals(signals);
+    return;
+  }
+
   // Skip if max positions reached — don't waste enrichment/LLM calls
   if (!canOpenMorePositions()) {
     const max = numSetting('max_open_positions', 3);
@@ -121,9 +126,135 @@ export async function processCandidateFromSignals(signals) {
   }
 }
 
+function candidateForStrategy(candidate, strat, filters = null) {
+  return {
+    ...candidate,
+    filters: filters || filterCandidate(candidate, strat),
+    signals: {
+      ...candidate.signals,
+      strategy: strat.id,
+    },
+  };
+}
+
+function ruleDecisionForStrategy(candidateId, candidate, strat, reason) {
+  return {
+    verdict: 'BUY',
+    confidence: 100,
+    selected_candidate_id: candidateId,
+    selected_mint: candidate.token.mint,
+    selected_row: { id: candidateId, candidate },
+    reason,
+    risks: [],
+    suggested_tp_percent: strat.tp_stages?.[0]?.trigger_percent ?? strat.tp_percent ?? numSetting('default_tp_percent', 50),
+    suggested_sl_percent: strat.sl_percent ?? numSetting('default_sl_percent', -25),
+    raw: null,
+  };
+}
+
+async function shadowDecisionForStrategy(candidateId, candidate, strat) {
+  if (!strat.use_llm) {
+    return { batchId: null, rows: [], decision: ruleDecisionForStrategy(candidateId, candidate, strat, `Strategy '${strat.id}' is rule-based; dry-run entry recorded.`) };
+  }
+  const rows = recentEligibleCandidates(numSetting('llm_candidate_pick_count', 10))
+    .map(row => row.id === candidateId ? { ...row, candidate } : row);
+  if (!rows.some(row => row.id === candidateId)) rows.push({ id: candidateId, candidate });
+  const decision = await decideCandidateBatch(rows, candidateId);
+  const batchId = storeBatchDecision(candidateId, rows, decision);
+  const selectedThisCandidate = decision.selected_row?.id === candidateId;
+  return {
+    batchId,
+    rows,
+    decision: {
+      ...decision,
+      shadow_mode: true,
+      shadow_selected_this_candidate: selectedThisCandidate,
+      reason: `[shadow] ${decision.reason || 'LLM screening recorded; dry-run strategy entry is rules-based.'}`,
+      suggested_tp_percent: strat.tp_stages?.[0]?.trigger_percent ?? decision.suggested_tp_percent ?? strat.tp_percent,
+      suggested_sl_percent: decision.suggested_sl_percent ?? strat.sl_percent,
+    },
+  };
+}
+
+async function processDryRunCandidateFromSignals(signals) {
+  const strategies = allActiveStrategies();
+  if (!strategies.some(strat => canOpenMorePositions(strat))) {
+    console.log(`[agent] all dry-run strategy capacities reached, skipping ${signals.mint.slice(0, 8)}...`);
+    return;
+  }
+
+  const candidate = await buildCandidate(signals);
+  const signature = signals.signature || null;
+  const strategyFilters = {};
+  for (const strat of strategies) {
+    strategyFilters[strat.id] = filterCandidate(candidate, strat);
+  }
+  const passedStrategies = strategies.filter(strat => strategyFilters[strat.id]?.passed);
+  candidate.strategyFilters = strategyFilters;
+  candidate.filters = {
+    passed: passedStrategies.length > 0,
+    failures: passedStrategies.length ? [] : Object.entries(strategyFilters).map(([id, result]) => `${id}: ${(result.failures || []).join('; ') || 'failed'}`),
+    warnings: [...new Set(Object.values(strategyFilters).flatMap(result => result.warnings || []))],
+    strategy: 'multi',
+  };
+
+  const candidateId = upsertCandidate(candidate, signature);
+  updateCandidateSnapshot(candidateId, candidate, candidate.filters.passed ? 'candidate' : 'filtered');
+
+  for (const strat of strategies) {
+    const strategyCandidate = candidateForStrategy(candidate, strat, strategyFilters[strat.id]);
+    const strategyRow = { id: candidateId, candidate: strategyCandidate };
+
+    if (!strategyCandidate.filters.passed) {
+      console.log(`[candidate] ${strat.id} filtered ${candidate.token.mint.slice(0, 8)}... ${strategyCandidate.filters.failures.join('; ')}`);
+      logDecisionEvent({
+        triggerCandidateId: candidateId,
+        selectedRow: strategyRow,
+        rows: [strategyRow],
+        decision: { verdict: 'REJECT', confidence: 100, reason: strategyCandidate.filters.failures.join('; ') },
+        mode: 'dry_run',
+        action: 'strategy_filter_rejected',
+        guardrails: { strategy_id: strat.id, failures: strategyCandidate.filters.failures, warnings: strategyCandidate.filters.warnings || [] },
+      });
+      continue;
+    }
+
+    if (!canOpenMorePositions(strat)) {
+      logDecisionEvent({
+        triggerCandidateId: candidateId,
+        selectedRow: strategyRow,
+        rows: [strategyRow],
+        decision: { verdict: 'WATCH', confidence: 100, reason: `Strategy '${strat.id}' capacity reached.` },
+        mode: 'dry_run',
+        action: 'entry_skipped_max_positions',
+        guardrails: { strategy_id: strat.id, maxOpenPositions: strat.max_open_positions, openPositions: openPositionCount(strat) },
+      });
+      continue;
+    }
+
+    const { batchId, rows, decision } = await shadowDecisionForStrategy(candidateId, strategyCandidate, strat);
+    const decisionId = storeDecision(candidateId, strategyCandidate, decision);
+    decision.id = decisionId;
+    const positionId = await createDryRunPosition(candidateId, strategyCandidate, decision, `strategy_${strat.id}_dry_run`, strat);
+    logDecisionEvent({
+      batchId,
+      triggerCandidateId: candidateId,
+      selectedRow: strategyRow,
+      rows: rows.length ? rows : [strategyRow],
+      decision,
+      mode: 'dry_run',
+      action: 'dry_run_strategy_entry',
+      guardrails: { strategy_id: strat.id, maxOpenPositions: strat.max_open_positions, openPositions: openPositionCount(strat), llmShadowMode: Boolean(strat.use_llm) },
+      execution: { positionId },
+    });
+    await sendPositionOpen(positionId);
+  }
+}
+
 export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [], triggerCandidateId = null) {
   const mode = tradingMode();
-  const freshSelectedRow = await refreshCandidateForExecution(selectedRow);
+  const strat = activeStrategy();
+  const freshSelectedRow = await refreshCandidateForExecution(selectedRow, strat);
   const executionRows = rows.map(row => row.id === freshSelectedRow.id ? freshSelectedRow : row);
   if (!freshSelectedRow.candidate.filters?.passed) {
     updateCandidateStatus(freshSelectedRow.id, 'stale_rejected');
@@ -151,7 +282,7 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
   }
 
   if (mode === 'dry_run') {
-    const positionId = await createDryRunPosition(freshSelectedRow.id, freshSelectedRow.candidate, decision, `llm_batch_${batchId}`);
+    const positionId = await createDryRunPosition(freshSelectedRow.id, freshSelectedRow.candidate, decision, `llm_batch_${batchId}`, strat);
     logDecisionEvent({
       batchId,
       triggerCandidateId,

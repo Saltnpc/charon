@@ -1,0 +1,158 @@
+You are the world's best trading systems architect. You are reviewing a list of proposed improvements for Charon — a Solana meme coin trading bot that screens Pump.fun tokens using signal overlap (fee-claim + graduated + trending), LLM screening, and Jupiter Ultra swaps.
+
+Read the codebase first to understand the CURRENT architecture:
+- src/app.js (bootstrap)
+- src/config.js (all config)
+- src/pipeline/orchestrator.js (main pipeline: signal → enrich → LLM → execute)
+- src/pipeline/candidateBuilder.js (enrichment + filterCandidate gates)
+- src/pipeline/llm.js (LLM screening prompt)
+- src/execution/positions.js (position monitoring, TP/SL/trailing)
+- src/db/connection.js (schema)
+- src/db/positions.js (position CRUD)
+- src/enrichment/gmgn.js (GMGN API)
+- src/enrichment/jupiter.js (Jupiter API)
+- src/signals/trending.js (trending filters)
+- src/learning/ghost.js (ghost tracking engine)
+- src/learning/classify.js (outcome classification)
+- src/learning/patterns.js (pattern detection)
+- src/learning/review.js (auto-review loop)
+
+The bot already has a "Deep Dry-Run Learning System" (ghost tracking, classification, pattern detection, auto-review, LLM lesson feedback). We've been running it in dry-run mode.
+
+=== CONTEXT ===
+
+We conducted extensive research from two sources:
+1. ponyin.id — Indonesian trading education (17 chapters on Solana on-chain analysis)
+2. Twitter/Reddit/Medium — general trenches survival strategies
+
+Below are ALL proposed improvements. YOUR JOB is NOT to implement anything. YOUR JOB is to be a strategic advisor:
+
+For EACH proposal, give your HONEST assessment:
+- 🟢 WILL MAKE CHARON SUPERIOR — explain WHY and HOW it increases edge
+- 🟡 NEUTRAL / SITUATIONAL — explain when it helps and when it doesn't
+- 🔴 WILL MAKE CHARON WORSE — explain WHY it would hurt performance, add complexity without value, or introduce new failure modes
+
+Be BRUTALLY HONEST. Some of these ideas SOUND good but may be bad in practice. I want you to identify which ones are "sounds smart but actually harmful" traps.
+
+=== PROPOSED IMPROVEMENTS ===
+
+CATEGORY A: SAFETY FILTERS (Pre-entry checks)
+
+A1. MINT/FREEZE AUTHORITY CHECK
+Add verification that token's Mint Authority and Freeze Authority are revoked before allowing entry. Reject tokens where either is still active. Use RugCheck API or on-chain Solana account data.
+
+A2. VOLUME vs GLOBAL FEES VALIDATION (Wash Trading Detector)
+Compare token's reported volume against actual global transaction fees. If volume is high but fees are disproportionately low, flag as wash trading and reject. Rationale: fees can't be faked on-chain.
+
+A3. LIQUIDITY LOCK VERIFICATION
+Check whether LP tokens are burned or locked for a significant duration. Unlocked LP = dev can pull liquidity at any time.
+
+A4. DEV WALLET AGE CHECK
+Check the age of the token creator's wallet. Dev wallet created < 24 hours ago = red flag. Dev with history of previous rugs = auto-reject.
+
+A5. HONEYPOT / TRANSFER HOOK DETECTION
+Check for custom transfer hooks or sell restrictions that prevent holders from selling.
+
+CATEGORY B: SIGNAL IMPROVEMENTS (Better entry decisions)
+
+B1. SMART MONEY WALLET MONITORING AS PRIMARY SIGNAL SOURCE
+We have 80+ tracked wallets of consistently profitable traders. Currently Charon only checks wallet exposure AFTER a candidate already exists (passive enrichment). Proposal: actively poll these wallets and when 3+ tracked wallets buy the same token, auto-generate a candidate.
+
+B2. HOLDER ANALYSIS FIX — EXCLUDE LP/BURN ADDRESSES
+Current holder % analysis includes LP pool addresses and burn addresses in "top holder" calculation. This makes safe tokens look risky. Fix: exclude known LP and burn addresses.
+
+B3. 3-CANDLE DIP CONFIRMATION FOR DIP_BUY STRATEGY
+Before entering on dip_buy strategy, require: (1) price touches support level, (2) volume spikes on bounce, (3) bullish candle closes above support. Use existing Jupiter chart data.
+
+B4. DEX PAID AS CONFIDENCE SIGNAL
+GMGN API returns whether a token has "DEX Paid" listing. This means dev paid $300-500 for listing — less likely to be instant rug. Use as positive signal in LLM prompt or filter score.
+
+B5. VOLUME SPIKE DETECTION (≥200% of baseline)
+Detect volume spikes ≥200% above 7-day average as accumulation signal. Currently Charon only checks absolute volume thresholds.
+
+B6. HOLDER GROWTH VELOCITY
+Track delta of unique holder count between time periods. Growing holders = organic interest. Stagnant/declining = dying token.
+
+B7. SOCIAL MOMENTUM / TWITTER MENTION VELOCITY
+Track Twitter mention frequency as a signal. Social velocity spike preceding price action = early entry opportunity.
+
+CATEGORY C: EXIT STRATEGY IMPROVEMENTS
+
+C1. MULTI-STAGE PARTIAL TP
+Instead of single PARTIAL_TP at one threshold, implement staged exits:
+- Stage 1: Sell 25% at 2x (recover initial)
+- Stage 2: Sell 25% at 4x (lock profit)
+- Stage 3: Trail remaining 50% with aggressive trailing stop
+
+C2. VOLUME-BASED EXIT SIGNAL
+Exit position if trading volume drops >70% from entry snapshot volume. Rationale: "volume is the heartbeat of a token — when volume dies, token dies."
+
+C3. TRAILING STOP OPTIMIZATION
+Test and tune trailing deviation between 15-25% instead of current fixed value. Consider making it adaptive based on token volatility.
+
+C4. MCAP-TIER ADAPTIVE TP/SL
+Auto-adjust TP/SL based on market cap tier:
+- Micro ($10K-$100K): TP 200-500%, SL -40%
+- Small ($100K-$1M): TP 50-200%, SL -25%
+- Mid ($1M+): TP 30-100%, SL -15%
+
+C5. MOMENTUM DEATH EXIT
+Exit if token disappears from trending feed after being trending at entry. Logic: losing trending status = momentum death.
+
+CATEGORY D: RISK MANAGEMENT
+
+D1. DAILY LOSS CIRCUIT BREAKER
+Auto-halt all trading after 3% portfolio daily loss OR 3 consecutive stop-loss exits.
+
+D2. CONSECUTIVE LOSS TRACKING + PAUSE
+Pause bot after N consecutive SL hits. Resume after cooldown period.
+
+D3. DRY POWDER RESERVE
+Stop opening new positions if SOL balance drops below 30% of initial balance. Always keep reserves for opportunities.
+
+D4. ADAPTIVE POSITION SIZING (COMPOUNDING)
+Instead of fixed SOL per trade: use 80% of available balance, compound winners, extract 35% of profits to cold wallet.
+
+D5. SOL PRICE CRASH PAUSE
+Pause all entries during SOL/USD crash >10%. Market-wide risk-off = all meme coins dump.
+
+CATEGORY E: DETECTION & INTELLIGENCE
+
+E1. CABAL PLAY DETECTION
+Detect coordinated buying: multiple large wallets buying within 10-30 minute window + sudden social media push = cabal play. Use as WARNING, not entry signal.
+
+E2. BUNDLE DETECTION PER-CANDIDATE
+Beyond the existing bundler_rate trending filter: for each individual candidate, analyze holder clustering to detect if supply is bundled (many wallets funded from same source).
+
+E3. NARRATIVE TAGGING SYSTEM
+Classify tokens by narrative meta (AI, political, animal, celebrity) and adjust TP/SL per category. Political = fast scalp, Animal = moonbag potential, Celebrity = ultra-fast exit.
+
+E4. MOMENTUM CASCADE PHASE DETECTION
+Detect which phase a token is in:
+- Phase 1: Smart money accumulation (on-chain visible, social quiet)
+- Phase 2: Social velocity increasing
+- Phase 3: Volume explosion, retail FOMO
+- Phase 4: Smart money distribution → EXIT ZONE
+Entry should be Phase 1-2 only. Phase 3-4 = avoid.
+
+E5. DAY PHASE SWING STRATEGY
+New strategy type: buy mid-cap tokens on weekend dips, sell on weekday volume spikes. Hold 3-7 days. Very different from current intraday approach.
+
+E6. NETWORK GAS HEALTH INDICATOR
+Monitor Solana network gas fees as market-wide health indicator. High gas = busy network = good. Low gas = quiet market = lower confidence.
+
+=== YOUR DELIVERABLE ===
+
+Write your strategic analysis to a file called codex_strategy_review.md in the project root. Structure it as:
+
+1. EXECUTIVE SUMMARY — Your top-level opinion: which category of improvements matters MOST?
+2. INDIVIDUAL ASSESSMENTS — For each proposal (A1-A5, B1-B7, C1-C5, D1-D5, E1-E6), give:
+   - 🟢/🟡/🔴 rating
+   - 2-3 sentence reasoning
+   - Specific concern if any (hidden complexity, false positives, API limitations, etc)
+3. THE "SOUNDS SMART BUT ACTUALLY BAD" LIST — Which proposals would HURT Charon if implemented?
+4. THE "BORING BUT CRITICAL" LIST — Which proposals seem boring but would have outsized impact?
+5. IMPLEMENTATION PRIORITY — If you could only pick 5 improvements, which 5 and in what order?
+6. WARNINGS — What general pitfalls should we watch out for when adding all this complexity to a trading bot?
+
+Remember: be a strategic advisor, not a yes-man. Some of these WILL make Charon worse. Find them.

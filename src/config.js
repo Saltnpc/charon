@@ -26,6 +26,7 @@ export const LIVE_MIN_SOL_RESERVE_LAMPORTS = Math.floor(Number(process.env.LIVE_
 export const LLM_BASE_URL = process.env.LLM_BASE_URL || 'https://api.minimax.io/v1';
 export const LLM_API_KEY = process.env.LLM_API_KEY || '';
 export const LLM_MODEL = process.env.LLM_MODEL || 'MiniMax-M2.7';
+export const LLM_LESSON_MODEL = process.env.LLM_LESSON_MODEL || LLM_MODEL;
 
 export const GRADUATED_POLL_MS = Number(process.env.GRADUATED_POLL_MS || 30_000);
 export const GRADUATED_LOOKBACK_MS = Number(process.env.GRADUATED_LOOKBACK_MS || 2 * 60 * 60 * 1000);
@@ -39,6 +40,16 @@ export const SIGNAL_SERVER_URL = process.env.SIGNAL_SERVER_URL || 'http://localh
 export const SIGNAL_SERVER_KEY = process.env.SIGNAL_SERVER_KEY || '';
 export const SIGNAL_POLL_MS = Number(process.env.SIGNAL_POLL_MS || 30_000);
 
+// Ghost tracking & learning system
+export const GHOST_CHECK_MS = Number(process.env.GHOST_CHECK_MS || 60_000);
+export const GHOST_MAX_ATTEMPTS = Number(process.env.GHOST_MAX_ATTEMPTS || 5);
+export const GHOST_BATCH_SIZE = Number(process.env.GHOST_BATCH_SIZE || 5);
+export const GHOST_STALE_CLAIM_MS = Number(process.env.GHOST_STALE_CLAIM_MS || 5 * 60_000);
+export const AUTO_REVIEW_MS = Number(process.env.AUTO_REVIEW_MS || 6 * 60 * 60_000);
+export const MIN_CLASSIFIED_FOR_PATTERNS = Number(process.env.MIN_CLASSIFIED_FOR_PATTERNS || 20);
+export const LESSON_EXPIRY_MS = Number(process.env.LESSON_EXPIRY_MS || 7 * 24 * 60 * 60_000);
+export const GHOST_AUTO_ACTIVATE_LESSONS = process.env.GHOST_AUTO_ACTIVATE_LESSONS === 'true';
+
 export const JSON_HEADERS = {
   Accept: 'application/json, text/plain, */*',
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -50,5 +61,7 @@ export function validateConfig() {
   if (!HELIUS_API_KEY && (!process.env.SOLANA_RPC_URL || !process.env.SOLANA_WS_URL)) {
     throw new Error('HELIUS_API_KEY is required unless SOLANA_RPC_URL and SOLANA_WS_URL are set.');
   }
-  if (GMGN_ENABLED && !GMGN_API_KEY) throw new Error('GMGN_API_KEY is required unless GMGN_ENABLED=false.');
+  if (GMGN_ENABLED && !GMGN_API_KEY) {
+    console.log('[config] GMGN_API_KEY not set — GMGN enrichment will be disabled. Set GMGN_ENABLED=false to silence this.');
+  }
 }

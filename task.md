@@ -1,0 +1,21 @@
+# Deep Dry-Run Learning System Tasks
+
+- [x] Phase 1: Schema & Infrastructure
+- [x] Phase 2: Snapshot Engine
+- [x] Phase 3: Classification
+  - [x] Create `src/learning/classify.js`
+  - [x] Implement `classifyDuePositions()`
+  - [x] Compute entry and exit scores
+  - [x] Assign `primary_outcome` using precedence rules
+  - [x] Insert outcomes through `insertPositionOutcome`
+- [x] Phase 4: Patterns & Review
+  - [x] Create `src/learning/patterns.js`
+  - [x] Include counterfactual exit simulation
+  - [x] Create `src/learning/review.js` with `runAutoReview()`
+  - [x] Extend `src/learning/summary.js` with ghost stats
+  - [x] Extend `src/learning/report.js` with ghost outcomes
+  - [x] Extend `src/learning/lessons.js` for `LLM_LESSON_MODEL` and lesson metadata
+- [x] Phase 5: LLM Feedback & Commands
+  - [x] Filter `activeLessonsForPrompt()` by confidence, expiry, strategy, and prompt-safe lesson types
+  - [x] Add `/ghost <id>`, `/review`, `/patterns`, and `/suggest`
+  - [x] Add the `runAutoReview()` interval using `AUTO_REVIEW_MS`

@@ -1,0 +1,20 @@
+# Smart Money Brainstorming Prompt for Codex 5.5
+
+You are an expert crypto trading systems architect. We are upgrading the "Charon" Solana meme coin trading bot.
+
+## Context
+We have curated a list of 80+ highly profitable "Smart Money" wallets based on the "Ponyin.id" trenching curriculum.
+Currently, Charon only uses this list **passively**: when a token is flagged by our Trending or Fee-claim routes, Charon checks if any of these 80+ wallets hold the token.
+
+We want to implement **"Smart Money as a Signal Source" (Fase 4 - B1)**. This means we will actively monitor these wallets to generate *new* trade candidates before they even hit the trending lists.
+
+## The Goal
+Provide a brutally honest, strategic brainstorming report on how best to use Smart Money data. 
+
+Please address the following points:
+1. **Active Polling Strategy:** What is the most robust and computationally efficient way to monitor these 80+ wallets? Should we poll their recent transactions/PnL periodically, or focus on a smaller, elite subset (e.g., top 15)?
+2. **Signal Thresholds:** If we track their buys, how do we differentiate between a smart money wallet making a high-conviction play vs. just throwing 0.1 SOL at a random micro-cap gamble? What overlap threshold (e.g., 2+ wallets buying the same token) is ideal?
+3. **Pitfalls & Manipulations:** What are the biggest dangers of copy-trading smart money on Solana meme coins? (e.g., wallet dusting, airdrop faking, front-running). How do we filter these out?
+4. **Integration with Charon:** Since Charon relies heavily on a dry-run/Ghost Tracking system before committing real capital, how should a "Smart Money Route" candidate be treated differently from a "Trending Route" candidate in terms of safety checks and position sizing?
+
+Keep your response analytical, deeply technical, and focused on survival in the Solana meme coin trenches.

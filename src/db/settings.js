@@ -53,6 +53,18 @@ export function allStrategies() {
   }));
 }
 
+export function allActiveStrategies() {
+  const rows = db.prepare('SELECT * FROM strategies WHERE enabled = 1 ORDER BY id').all();
+  const strategies = rows.map(row => ({
+    id: row.id,
+    name: row.name,
+    enabled: Boolean(row.enabled),
+    ...JSON.parse(row.config_json),
+  }));
+  if (strategies.length) return strategies;
+  return [activeStrategy()];
+}
+
 export function setActiveStrategy(id) {
   db.prepare('UPDATE strategies SET enabled = 0').run();
   db.prepare('UPDATE strategies SET enabled = 1 WHERE id = ?').run(id);
@@ -79,7 +91,7 @@ function defaultStrategy() {
     id: 'sniper', name: 'Sniper',
     entry_mode: 'immediate', min_source_count: 2, require_fee_claim: true,
     token_age_max_ms: 3600000, min_mcap_usd: 7000, max_mcap_usd: 200000,
-    min_fee_claim_sol: 0.5, min_gmgn_total_fee_sol: 10, min_holders: 0,
+    min_fee_claim_sol: 0.5, min_gmgn_total_fee_sol: 10, min_holders: 0, min_holder_velocity: 0,
     max_top20_holder_percent: 100, min_saved_wallet_holders: 0, max_ath_distance_pct: 0,
     min_graduated_volume_usd: 0, trending_min_volume_usd: 0, trending_min_swaps: 0,
     trending_max_rug_ratio: 0.3, trending_max_bundler_rate: 0.5,

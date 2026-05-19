@@ -1,0 +1,27 @@
+You are reviewing a FINAL implementation plan for a "Deep Dry-Run Learning System" to be added to the Charon trading bot (codebase is in this directory).
+
+READ the implementation plan file at: C:\Users\MXC\.gemini\antigravity\brain\aa329441-bac5-4951-8bc1-49158868cef2\implementation_plan.md
+
+Also read the existing codebase files that will be modified:
+- src/db/connection.js (schema)
+- src/execution/positions.js (close paths)
+- src/learning/summary.js, src/learning/lessons.js, src/learning/report.js
+- src/pipeline/llm.js (LLM prompt)
+- src/app.js (intervals)
+- src/config.js (constants)
+- src/telegram/commands.js (commands)
+
+And read the previous Codex analysis at: codex_analysis.md
+
+YOUR TASK - As a senior systems architect, review this finalized plan and provide:
+
+1. APPROVAL or REJECTION with clear reasoning
+2. Any CRITICAL ISSUES that would cause the implementation to fail or produce bugs
+3. Any MISSING DETAILS that the implementing developer would get stuck on
+4. IMPLEMENTATION ORDER RISKS - are there dependency issues between phases?
+5. CONCURRENCY CONCERNS - the ghost monitor loop runs on setInterval alongside position monitor. Any race conditions?
+6. DATABASE CONCERNS - any SQLite-specific issues (WAL mode, concurrent writes, transaction boundaries)?
+7. EDGE CASES not covered in the plan
+8. Your TOP 3 SUGGESTIONS for improvement
+
+Write your review to codex_review.md in the project root. Be thorough but concise.

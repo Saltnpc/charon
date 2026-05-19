@@ -1,9 +1,11 @@
 import { setDefaultResultOrder } from 'node:dns';
-import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, validateConfig } from './config.js';
+import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, GHOST_CHECK_MS, AUTO_REVIEW_MS, validateConfig } from './config.js';
 import { initDb } from './db/connection.js';
 import { initLiveExecution } from './liveExecutor.js';
 import { setupTelegram } from './telegram/commands.js';
 import { monitorPositions } from './execution/positions.js';
+import { monitorGhostTracking } from './learning/ghost.js';
+import { runAutoReview } from './learning/review.js';
 import { processCandidateFromSignals, maybeProcessDegenCandidate } from './pipeline/orchestrator.js';
 import { sendTelegram } from './telegram/send.js';
 import { makeFailureTracker } from './utils.js';
@@ -60,4 +62,13 @@ export async function startCharon() {
   // Position monitoring runs in both modes
   const trackPositions = makeFailureTracker('position monitor', (msg) => sendTelegram(msg));
   setInterval(() => trackPositions(() => monitorPositions()), POSITION_CHECK_MS);
+
+  // Ghost tracking monitor runs in both modes
+  const trackGhost = makeFailureTracker('ghost monitor', (msg) => sendTelegram(msg));
+  setInterval(() => trackGhost(() => monitorGhostTracking()), GHOST_CHECK_MS);
+  console.log(`[ghost] monitor started (interval: ${GHOST_CHECK_MS}ms)`);
+
+  const trackReview = makeFailureTracker('auto review', (msg) => sendTelegram(msg));
+  setInterval(() => trackReview(() => runAutoReview()), AUTO_REVIEW_MS);
+  console.log(`[learn] auto review started (interval: ${AUTO_REVIEW_MS}ms)`);
 }

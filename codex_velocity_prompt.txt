@@ -1,0 +1,19 @@
+Read `implementation_plan.md` and implement the changes described in "P4.2 Holder Growth Velocity (New Feature)".
+
+Specifically, please make the following changes:
+
+1. In `src/pipeline/candidateBuilder.js`:
+   - In `buildCandidate()`, extract `pool_age_minutes` using `devFundedAt` from the Jupiter Audit object (`row.audit.devFundedAt`). 
+     - Calculate age in ms: `const ageMs = now() - new Date(audit.devFundedAt).getTime();`
+     - Calculate age in minutes: `const pool_age_minutes = ageMs / 60000;`
+   - Calculate `holder_velocity = holder_count / Math.max(1, pool_age_minutes)`.
+   - Add `holder_velocity` to the `candidate.metrics` object.
+   - In `filterCandidate(candidate, strategyOverride)`, add a check: if `strat.min_holder_velocity > 0` and `candidate.metrics.holder_velocity < strat.min_holder_velocity`, push a failure string to `failures` (e.g. `holder velocity ${vel.toFixed(1)} < min ${strat.min_holder_velocity}`).
+
+2. In `src/db/settings.js`:
+   - Add `min_holder_velocity: '0'` to the `defaults` object.
+
+3. In `src/db/connection.js`:
+   - Update the strategy JSON defaults to include `min_holder_velocity: 0` for all 4 strategies: 'sniper', 'dip_buy', 'smart_money', 'degen'. Ensure you update the JSON payloads in `stratInsert.run` for each of them.
+
+Apply the changes directly to the source files. Output a summary of your actions to `codex_velocity_report.md`.

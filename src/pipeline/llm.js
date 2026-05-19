@@ -19,14 +19,19 @@ export function normalizeDecision(parsed, fallbackReason = '') {
   };
 }
 
-export function activeLessonsForPrompt(limit = 6) {
+export function activeLessonsForPrompt({ limit = 4, strategyId = null } = {}) {
+  const ts = now();
   return db.prepare(`
     SELECT lesson
     FROM learning_lessons
     WHERE status = 'active'
+      AND lesson_type IN ('screening', 'risk')
+      AND confidence >= 0.7
+      AND (expires_at_ms IS NULL OR expires_at_ms > ?)
+      AND (strategy_id IS NULL OR strategy_id = ?)
     ORDER BY id DESC
     LIMIT ?
-  `).all(limit).map(row => row.lesson);
+  `).all(ts, strategyId, limit).map(row => row.lesson);
 }
 
 export function compactCandidateForLlm(row) {
@@ -94,7 +99,10 @@ export async function decideCandidateBatch(rows, triggerCandidateId) {
   ].join(' ');
   const user = {
     task: 'Pick the best dry-run buy candidate from this recent batch, or choose none.',
-    recent_lessons: activeLessonsForPrompt(),
+    recent_lessons: activeLessonsForPrompt({
+      strategyId: rows.find(row => row.candidate?.filters?.strategy)?.candidate.filters.strategy || null,
+      limit: 4,
+    }),
     output_schema: {
       verdict: 'BUY|WATCH|PASS',
       selected_candidate_id: 'integer candidate_id when verdict is BUY, otherwise null',

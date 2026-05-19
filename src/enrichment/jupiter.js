@@ -98,7 +98,23 @@ async function estimateTokenAmountFromSol(sizeSol, entryPrice) {
   return Number(sizeSol) * solUsd / Number(entryPrice);
 }
 
-async function fetchJupiterHolders(mint) {
+function holderIsOrganic(holder) {
+  const tags = (holder.tags || [])
+    .map(tag => String(tag.name || tag.id || tag).toLowerCase())
+    .filter(Boolean);
+  const owner = String(holder.owner || holder.address || '').toLowerCase();
+  const ignored = ['pool', 'amm', 'lp', 'liquidity', 'cex', 'exchange', 'burn', 'dead', 'locker', 'raydium', 'meteora', 'orca'];
+  return !tags.some(tag => ignored.some(term => tag.includes(term)))
+    && !ignored.some(term => owner.includes(term));
+}
+
+function gmgnTopHolderFallback(gmgn) {
+  const rate = Number(gmgn?.stat?.top_10_holder_rate ?? gmgn?.top_10_holder_rate);
+  if (!Number.isFinite(rate)) return null;
+  return rate <= 1 ? rate * 100 : rate;
+}
+
+async function fetchJupiterHolders(mint, gmgn = null) {
   try {
     const res = await axios.get(`https://datapi.jup.ag/v1/holders/${mint}`, {
       timeout: 10_000,
@@ -116,12 +132,17 @@ async function fetchJupiterHolders(mint) {
         tags: (holder.tags || []).map(tag => tag.name || tag.id).filter(Boolean),
       };
     });
-    const top20 = mapped.slice(0, 20);
+    const organic = mapped.filter(holderIsOrganic);
+    const top20 = organic.slice(0, 20);
+    const top20Percent = top20.length
+      ? top20.reduce((sum, holder) => sum + Number(holder.percent || 0), 0)
+      : gmgnTopHolderFallback(gmgn);
     return {
       count: holders.length,
       holders: mapped,
       top20,
-      top20Percent: top20.reduce((sum, holder) => sum + Number(holder.percent || 0), 0),
+      organicCount: organic.length,
+      top20Percent,
       maxHolderPercent: Math.max(0, ...top20.map(holder => Number(holder.percent || 0))),
     };
   } catch (err) {

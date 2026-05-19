@@ -1,0 +1,38 @@
+You are analyzing a Solana meme coin trading bot called Charon (the codebase is in this directory). Read the key files first: src/app.js, src/pipeline/orchestrator.js, src/execution/positions.js, src/learning/summary.js, src/learning/lessons.js, src/db/positions.js, src/db/connection.js.
+
+I have a concept for a "Deep Dry-Run Learning System" and I need your BRUTAL HONEST analysis, corrections, and additional ideas.
+
+=== CONCEPT ===
+
+1. GHOST TRACKING: After a dry-run position closes (TP, SL, trailing, manual), continue monitoring the token price for 24h. Snapshot at +15m, +1h, +3h, +6h, +12h, +24h using Jupiter/GMGN APIs. Store in new ghost_tracking table.
+
+2. OUTCOME CLASSIFICATION - auto-classify each closed position:
+- EXIT_TOO_EARLY: price went >100% higher after exit
+- PERFECT_EXIT: price dropped >20% within 3h after exit
+- EXIT_TOO_LATE: had TP opportunity but ended at SL
+- RUG_DODGED: token dropped >90% in 24h after exit
+- RUG_HIT: SL hit + liquidity crash
+- SLOW_BLEED: gradual SL hit without volume
+- LATE_ENTRY: entry was >70% of ATH
+- FALSE_SIGNAL: SL hit within <15 minutes
+- SIDEWAYS: max_hold exit without hitting TP or SL
+
+3. ENTRY/EXIT QUALITY SCORING (0-100) based on timing, signal strength, holder distribution, volume, distance from ATH, and ghost tracking results.
+
+4. PATTERN DETECTION: Detect mcap sweet spots, best routes, best time of day, optimal TP levels from accumulated dry-run data. Store in position_patterns table.
+
+5. AUTO-REVIEW every 6 hours: aggregate outcomes, generate insights, send Telegram report, auto-generate lessons fed back into LLM screening prompt.
+
+6. NEW COMMANDS: /ghost <id>, /patterns, /suggest, /review <window>
+
+=== YOUR TASKS ===
+
+1. Read the actual codebase to understand how positions, monitoring, and learning currently work
+2. What is WRONG or IMPRACTICAL about this concept? Be specific.
+3. What is MISSING from this concept?
+4. Give CORRECTIONS and IMPROVEMENTS with code-level detail
+5. Add your own IDEAS for making the learning system better
+6. Consider edge cases: API failures during ghost tracking, delisted tokens, rate limits, overlapping classifications, data volume over weeks
+7. How should this integrate with the existing learning system (learning/summary.js, learning/lessons.js)?
+
+Write your full analysis to a file called codex_analysis.md in the project root. Be detailed and brutally honest.

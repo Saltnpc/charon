@@ -1,7 +1,7 @@
 import { bot } from './bot.js';
 import { TELEGRAM_CHAT_ID } from '../config.js';
-import { now, json } from '../utils.js';
-import { escapeHtml, fmtPct } from '../format.js';
+import { now, json, parseWindowMs, formatWindow, safeJson } from '../utils.js';
+import { escapeHtml, fmtPct, fmtUsd } from '../format.js';
 import { db } from '../db/connection.js';
 import { numSetting, boolSetting, setSetting, activeStrategy, setActiveStrategy, strategyById, updateStrategyConfig } from '../db/settings.js';
 import { candidateById, latestCandidateByMint, updateCandidateStatus } from '../db/candidates.js';
@@ -29,6 +29,10 @@ import { handleCallback, editMenuMessage } from './callbacks.js';
 import { consumeNumericFilterInput } from './input.js';
 import { runLearning, sendLessons } from '../learning/commands.js';
 import { fetchWalletPnl } from '../enrichment/wallets.js';
+import { getGhostJobsForPosition, getOutcomeForPosition, getSnapshotsForPosition, ghostStats } from '../db/ghost.js';
+import { scheduleGhostTracking } from '../learning/ghost.js';
+import { runAutoReview } from '../learning/review.js';
+import { latestPatterns } from '../learning/patterns.js';
 
 export async function handleMessage(msg) {
   const text = (msg.text || '').trim();
@@ -81,6 +85,23 @@ export async function handleMessage(msg) {
     return runLearning(chatId, windowArg);
   }
   if (text.startsWith('/lessons')) return sendLessons(chatId);
+  if (text.startsWith('/ghost')) {
+    const id = Number(text.split(/\s+/)[1]);
+    if (!Number.isFinite(id)) return bot.sendMessage(chatId, 'Usage: /ghost <position_id>');
+    return sendGhost(chatId, id);
+  }
+  if (text.startsWith('/review')) {
+    const windowArg = text.split(/\s+/)[1] || '72h';
+    const windowMs = parseWindowMs(windowArg);
+    await bot.sendMessage(chatId, `Running ghost review for ${formatWindow(windowMs)}...`);
+    const result = await runAutoReview({ windowMs, sendReport: false });
+    if (result.report) {
+      return bot.sendMessage(chatId, result.report, { parse_mode: 'HTML', disable_web_page_preview: true });
+    }
+    return bot.sendMessage(chatId, `Review skipped: ${result.skipped || 'unknown'}`);
+  }
+  if (text.startsWith('/patterns')) return sendPatterns(chatId);
+  if (text.startsWith('/suggest')) return sendSuggestions(chatId);
   if (text.startsWith('/candidate')) {
     const mint = text.split(/\s+/)[1];
     if (!mint) return bot.sendMessage(chatId, 'Usage: /candidate <mint>');
@@ -185,16 +206,23 @@ export async function closePosition(chatId, id, reason) {
   const pnlSol = Number(row.size_sol) * pnlPercent / 100;
   let sell = null;
   if (row.execution_mode === 'live') sell = await executeLiveSell(row, reason);
-  db.prepare(`
-    UPDATE dry_run_positions
-    SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?, exit_reason = ?,
-        pnl_percent = ?, pnl_sol = ?, exit_signature = ?
-    WHERE id = ?
-  `).run(now(), price, mcap, reason, pnlPercent, pnlSol, sell?.signature || null, id);
-  db.prepare(`
-    INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
-    VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, row.mint, now(), price, mcap, row.size_sol, row.token_amount_est, reason, json({ pnlPercent, pnlSol, sell }));
+  const closedAt = now();
+  const resultUpdate = db.transaction(() => {
+    const update = db.prepare(`
+      UPDATE dry_run_positions
+      SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?, exit_reason = ?,
+          pnl_percent = ?, pnl_sol = ?, exit_signature = ?
+      WHERE id = ? AND status = 'open'
+    `).run(closedAt, price, mcap, reason, pnlPercent, pnlSol, sell?.signature || null, id);
+    if (update.changes !== 1) return update;
+    db.prepare(`
+      INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
+      VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, row.mint, closedAt, price, mcap, row.size_sol, row.token_amount_est, reason, json({ pnlPercent, pnlSol, sell }));
+    scheduleGhostTracking(id, row.mint);
+    return update;
+  })();
+  if (resultUpdate.changes !== 1) return bot.sendMessage(chatId, 'Position was already closed.');
   const label = row.execution_mode === 'live' ? 'Closed live position' : 'Closed dry-run position';
   await bot.sendMessage(chatId, `${label} #${id}: ${escapeHtml(reason)} ${fmtPct(pnlPercent)}`, { parse_mode: 'HTML' });
 }
@@ -236,6 +264,72 @@ export async function toggleTrailing(chatId, id, query = null) {
   await sendPosition(chatId, id, query);
 }
 
+function compactTags(value) {
+  const tags = safeJson(value, []);
+  return Array.isArray(tags) && tags.length ? tags.join(', ') : 'none';
+}
+
+export async function sendGhost(chatId, id) {
+  const position = db.prepare('SELECT * FROM dry_run_positions WHERE id = ?').get(id);
+  if (!position) return bot.sendMessage(chatId, 'Position not found.');
+  const outcome = getOutcomeForPosition(id);
+  const jobs = getGhostJobsForPosition(id);
+  const snapshots = getSnapshotsForPosition(id);
+  const statusCounts = jobs.reduce((acc, job) => {
+    acc[job.status] = (acc[job.status] || 0) + 1;
+    return acc;
+  }, {});
+  const snapshotLines = snapshots.slice(-8).map(row => {
+    const move = row.mcap_vs_exit_pct ?? row.price_vs_exit_pct ?? row.mcap_vs_entry_pct ?? row.price_vs_entry_pct;
+    return `${row.phase} +${Math.round(row.offset_ms / 60_000)}m ${fmtPct(move)} ${fmtUsd(row.mcap_usd)} ${row.data_quality}`;
+  });
+  const text = [
+    `<b>Ghost #${id}</b> ${escapeHtml(position.symbol || position.mint)}`,
+    `Status: ${escapeHtml(position.status)} | Exit: ${escapeHtml(position.exit_reason || 'open')} | PnL: ${fmtPct(position.pnl_percent)}`,
+    `Jobs: ${Object.entries(statusCounts).map(([key, value]) => `${key} ${value}`).join(', ') || 'none'}`,
+    outcome ? '' : null,
+    outcome ? `<b>Outcome</b>: ${escapeHtml(outcome.primary_outcome)}` : null,
+    outcome ? `Scores: entry ${fmtPct(outcome.entry_score)} | exit ${fmtPct(outcome.exit_score)} | total ${fmtPct(outcome.total_score)}` : null,
+    outcome ? `Entry tags: ${escapeHtml(compactTags(outcome.entry_tags_json))}` : null,
+    outcome ? `Exit tags: ${escapeHtml(compactTags(outcome.exit_tags_json))}` : null,
+    outcome ? `Risk tags: ${escapeHtml(compactTags(outcome.risk_tags_json))}` : null,
+    outcome ? `Missed upside: ${fmtPct(outcome.missed_upside_pct)} | Avoided downside: ${fmtPct(outcome.avoided_downside_pct)}` : null,
+    snapshotLines.length ? '' : null,
+    snapshotLines.length ? '<b>Recent Snapshots</b>' : null,
+    ...snapshotLines.map(escapeHtml),
+  ].filter(Boolean).join('\n').slice(0, 3900);
+  return bot.sendMessage(chatId, text, { parse_mode: 'HTML', disable_web_page_preview: true });
+}
+
+export async function sendPatterns(chatId) {
+  const rows = latestPatterns(10);
+  if (!rows.length) {
+    const stats = ghostStats();
+    return bot.sendMessage(chatId, `No learning patterns yet. Classified: ${stats.classified}, pending: ${stats.unclassified}. Run /review after enough outcomes.`);
+  }
+  const lines = rows.map((row, index) => [
+    `${index + 1}. <b>${escapeHtml(row.pattern_type)}=${escapeHtml(row.pattern_key)}</b>`,
+    `n=${row.sample_size} | confidence ${fmtPct(Number(row.confidence) * 100)} | median ${fmtPct(row.median_pnl_pct)}`,
+    row.recommendation ? escapeHtml(row.recommendation) : null,
+  ].filter(Boolean).join('\n'));
+  return bot.sendMessage(chatId, `<b>Learning Patterns</b>\n\n${lines.join('\n\n')}`.slice(0, 3900), { parse_mode: 'HTML' });
+}
+
+export async function sendSuggestions(chatId) {
+  const rows = latestPatterns(20).filter(row => row.recommendation);
+  if (!rows.length) return bot.sendMessage(chatId, 'No pattern-backed suggestions yet. Run /review after more classified outcomes.');
+  const lines = rows.slice(0, 8).map((row, index) => {
+    const evidence = safeJson(row.evidence_json, {}) || {};
+    const cf = evidence.counterfactuals || {};
+    return [
+      `${index + 1}. ${escapeHtml(row.recommendation)}`,
+      `Evidence: ${escapeHtml(row.pattern_type)}=${escapeHtml(row.pattern_key)}, n=${row.sample_size}, confidence ${fmtPct(Number(row.confidence) * 100)}`,
+      cf.hold1hMedian != null || cf.hold3hMedian != null ? `Counterfactual hold: 1h ${fmtPct(cf.hold1hMedian)} | 3h ${fmtPct(cf.hold3hMedian)}` : null,
+    ].filter(Boolean).join('\n');
+  });
+  return bot.sendMessage(chatId, `<b>Ghost Suggestions</b>\n\n${lines.join('\n\n')}`.slice(0, 3900), { parse_mode: 'HTML' });
+}
+
 export function setupTelegram() {
   bot.setMyCommands([
     { command: 'menu', description: 'Open Charon menu' },
@@ -247,6 +341,10 @@ export function setupTelegram() {
     { command: 'pnl', description: 'Show saved-wallet PnL' },
     { command: 'learn', description: 'Run manual learning report' },
     { command: 'lessons', description: 'Show active screening lessons' },
+    { command: 'ghost', description: 'Show ghost tracking for a position' },
+    { command: 'review', description: 'Run ghost-aware learning review' },
+    { command: 'patterns', description: 'Show recent learning patterns' },
+    { command: 'suggest', description: 'Show ghost learning suggestions' },
     { command: 'setfilter', description: 'Set a filter value' },
     { command: 'walletadd', description: 'Save wallet for exposure/PnL' },
     { command: 'walletremove', description: 'Remove saved wallet' },

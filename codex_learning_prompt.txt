@@ -1,0 +1,57 @@
+You are reviewing the implementation plan for "Charon", a Solana meme coin trading bot. Your role is to act as a brutally honest senior systems architect and quantitative trader.
+
+## CONTEXT
+
+Charon is being prepared for a 7+ day dry-run where ALL 4 strategies (sniper, dip_buy, smart_money, degen) will run in parallel on virtual capital (1 SOL each). The goal is to collect comparative data before going live.
+
+## YOUR TASK
+
+1. Read the full implementation plan: implementation_plan.md (in the artifacts directory or the file I'll paste below)
+2. Read the current learning system files to understand what exists:
+   - src/learning/ghost.js (ghost tracking - post-exit price snapshots)
+   - src/learning/classify.js (outcome classification - RUG_HIT, EXIT_TOO_EARLY, etc.)
+   - src/learning/patterns.js (pattern detection - by route, strategy, mcap tier)
+   - src/learning/lessons.js (LLM-generated lessons from data)
+   - src/learning/review.js (auto-review loop that ties it all together)
+   - src/learning/summary.js (window-based performance summaries)
+3. Read the pipeline and execution files:
+   - src/pipeline/orchestrator.js (signal processing and buy decisions)
+   - src/pipeline/candidateBuilder.js (candidate enrichment and filtering)
+   - src/execution/positions.js (position monitoring, TP/SL/trailing)
+   - src/db/positions.js (position creation, open/close)
+   - src/db/settings.js (strategy config, active strategy)
+
+## QUESTIONS TO ANSWER
+
+### A. Implementation Plan Review
+- Is the execution order correct? Any dependency we're missing?
+- Are the safety gate thresholds (dev_hold 30%, creator_hold 30%, degen 50%) reasonable?
+- Is multi-strategy parallel dry-run architecturally sound? Any gotchas?
+- Are the TP stage configurations per strategy reasonable for meme coins?
+
+### B. Learning System Gaps (CRITICAL)
+The current learning system has 4 stages (Ghost → Classify → Patterns → Lessons) that run automatically. BUT the feedback loop is OPEN — lessons are generated but never fed back into the system. Specifically:
+
+1. **Lessons → LLM Prompt**: Generated lessons are NOT injected into the LLM screening prompt for new candidates. Should they be? How?
+2. **Auto-Tuning**: Should patterns with high confidence auto-adjust strategy parameters (TP/SL thresholds)? Or is that too dangerous?
+3. **Route/Strategy Auto-Disable**: If a route+strategy combo has <15% win rate over 10+ trades, should the bot auto-skip it?
+4. **Per-Strategy Comparison**: The summary system doesn't compare strategies head-to-head. What metrics matter most for the comparison?
+5. **Counterfactual Exit Analysis**: patterns.js already simulates "what if we held longer" — but the results aren't used. How should they influence exit policy?
+
+### C. Multi-Strategy Dry-Run Specific
+- With 4 strategies running, the same token can have 4 positions. How should position monitoring handle this efficiently?
+- Should ghost tracking run separately per strategy-position, or can we share snapshots?
+- How should the daily Telegram digest present 4-strategy comparison data?
+
+### D. Anything We're Missing?
+- Any critical failure mode we haven't considered?
+- Any data we should be logging during dry-run that we're not?
+- Should we add any additional ghost snapshot intervals for meme coin volatility?
+
+## OUTPUT FORMAT
+
+Write your analysis to codex_learning_review.md with:
+1. Clear section headers
+2. Specific code-level recommendations (mention exact file + function names)
+3. Priority ranking (P0 = must have before dry-run, P1 = should have, P2 = nice to have)
+4. Warnings about anything that could corrupt dry-run data quality

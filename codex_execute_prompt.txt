@@ -1,0 +1,23 @@
+You are an expert system architect and coder. You will implement the changes detailed in the implementation_plan.md for the Charon trading bot.
+
+## YOUR TASK
+Read `implementation_plan.md` in this directory (FINAL v3). Your goal is to systematically implement the code changes required for:
+1. P0.1 - P0.3: Strategy attribution, deduplication per strategy, capacity per strategy, orchestrator multi-strategy loop with LLM shadow mode, and learning summary fixes.
+2. P0.4: Multi-stage TP accounting (initial_size_sol, realized_pnl_sol, remaining_fraction) and updated TP config in `connection.js` and `positions.js`.
+3. P1.1 - P1.2: Safety Gates (Mint/Freeze as Hard Gates, rest as soft warnings) in `candidateBuilder.js` and Holder Analysis Fix in `jupiter.js`.
+
+Use any appropriate shell commands (e.g. sed, awk) or node scripts to modify the files directly in place. You can also write python/node scripts to perform the ast parsing and replacements if sed is too brittle. 
+Alternatively, output the complete file contents or clear unified diffs to a file `codex_diffs.patch` and apply it.
+
+Make sure you read the source files first to understand where to place these changes. The files involved are:
+- `src/db/settings.js`
+- `src/pipeline/candidateBuilder.js`
+- `src/pipeline/orchestrator.js`
+- `src/db/positions.js`
+- `src/execution/positions.js`
+- `src/db/connection.js`
+- `src/enrichment/jupiter.js`
+- `src/learning/summary.js`
+- `src/learning/patterns.js`
+
+Be extremely careful not to break existing functionality. Apply the changes cleanly. Write a report to `codex_execution_report.md` summarizing exactly what files you modified and what changes were successfully applied.

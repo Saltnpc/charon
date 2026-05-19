@@ -69,6 +69,10 @@ export function initDb() {
       opened_at_ms INTEGER NOT NULL,
       closed_at_ms INTEGER,
       size_sol REAL NOT NULL,
+      initial_size_sol REAL,
+      realized_pnl_sol REAL NOT NULL DEFAULT 0,
+      remaining_fraction REAL NOT NULL DEFAULT 1,
+      tp_stage_index INTEGER NOT NULL DEFAULT 0,
       entry_price REAL,
       entry_mcap REAL,
       token_amount_est REAL,
@@ -198,6 +202,90 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_decision_logs_mint ON decision_logs(selected_mint);
     CREATE INDEX IF NOT EXISTS idx_signal_events_mint ON signal_events(mint);
     CREATE INDEX IF NOT EXISTS idx_learning_lessons_status ON learning_lessons(status, created_at_ms);
+
+    CREATE TABLE IF NOT EXISTS ghost_tracking_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      position_id INTEGER NOT NULL,
+      mint TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      offset_ms INTEGER NOT NULL,
+      due_at_ms INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      claimed_at_ms INTEGER,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 5,
+      last_error TEXT,
+      completed_at_ms INTEGER,
+      UNIQUE(position_id, phase, offset_ms)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ghost_jobs_due ON ghost_tracking_jobs(status, due_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_ghost_jobs_position ON ghost_tracking_jobs(position_id);
+
+    CREATE TABLE IF NOT EXISTS ghost_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      position_id INTEGER NOT NULL,
+      mint TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      offset_ms INTEGER NOT NULL,
+      requested_for_ms INTEGER NOT NULL,
+      observed_at_ms INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      source_status TEXT NOT NULL,
+      data_quality TEXT NOT NULL DEFAULT 'full',
+      price_usd REAL,
+      mcap_usd REAL,
+      liquidity_usd REAL,
+      volume_usd REAL,
+      price_vs_entry_pct REAL,
+      price_vs_exit_pct REAL,
+      mcap_vs_entry_pct REAL,
+      mcap_vs_exit_pct REAL,
+      raw_json TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ghost_snap_unique ON ghost_snapshots(position_id, phase, offset_ms);
+    CREATE INDEX IF NOT EXISTS idx_ghost_snap_position ON ghost_snapshots(position_id, phase);
+
+    CREATE TABLE IF NOT EXISTS position_outcomes (
+      position_id INTEGER PRIMARY KEY,
+      classified_at_ms INTEGER NOT NULL,
+      primary_outcome TEXT NOT NULL,
+      entry_score REAL,
+      exit_score REAL,
+      total_score REAL,
+      entry_tags_json TEXT NOT NULL DEFAULT '[]',
+      exit_tags_json TEXT NOT NULL DEFAULT '[]',
+      risk_tags_json TEXT NOT NULL DEFAULT '[]',
+      signal_tags_json TEXT NOT NULL DEFAULT '[]',
+      max_price_after_exit REAL,
+      min_price_after_exit REAL,
+      missed_upside_pct REAL,
+      avoided_downside_pct REAL,
+      data_quality TEXT NOT NULL DEFAULT 'full',
+      snapshot_count INTEGER NOT NULL DEFAULT 0,
+      review_status TEXT NOT NULL DEFAULT 'auto',
+      metrics_json TEXT NOT NULL DEFAULT '{}',
+      evidence_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_outcomes_primary ON position_outcomes(primary_outcome, classified_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_outcomes_time ON position_outcomes(classified_at_ms);
+
+    CREATE TABLE IF NOT EXISTS learning_patterns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at_ms INTEGER NOT NULL,
+      window_ms INTEGER NOT NULL,
+      pattern_type TEXT NOT NULL,
+      pattern_key TEXT NOT NULL,
+      sample_size INTEGER NOT NULL,
+      win_rate REAL,
+      median_pnl_pct REAL,
+      missed_upside_rate REAL,
+      false_signal_rate REAL,
+      confidence REAL NOT NULL,
+      recommendation TEXT,
+      evidence_json TEXT NOT NULL DEFAULT '{}',
+      UNIQUE(created_at_ms, pattern_type, pattern_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_patterns_type ON learning_patterns(pattern_type, created_at_ms);
   `);
   ensureColumn('candidates', 'signal_key', 'TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_signal_key ON candidates(signal_key) WHERE signal_key IS NOT NULL');
@@ -207,7 +295,19 @@ export function initDb() {
   ensureColumn('dry_run_positions', 'token_amount_raw', 'TEXT');
   ensureColumn('dry_run_positions', 'strategy_id', "TEXT DEFAULT 'sniper'");
   ensureColumn('dry_run_positions', 'partial_tp_done', 'INTEGER DEFAULT 0');
+  ensureColumn('dry_run_positions', 'initial_size_sol', 'REAL');
+  ensureColumn('dry_run_positions', 'realized_pnl_sol', 'REAL DEFAULT 0');
+  ensureColumn('dry_run_positions', 'remaining_fraction', 'REAL DEFAULT 1');
+  ensureColumn('dry_run_positions', 'tp_stage_index', 'INTEGER DEFAULT 0');
   ensureColumn('decision_logs', 'strategy_id', 'TEXT');
+
+  // Ghost learning extensions for learning_lessons
+  ensureColumn('learning_lessons', 'lesson_type', "TEXT DEFAULT 'screening'");
+  ensureColumn('learning_lessons', 'confidence', 'REAL DEFAULT 0.5');
+  ensureColumn('learning_lessons', 'support_count', 'INTEGER DEFAULT 0');
+  ensureColumn('learning_lessons', 'strategy_id', 'TEXT');
+  ensureColumn('learning_lessons', 'route', 'TEXT');
+  ensureColumn('learning_lessons', 'expires_at_ms', 'INTEGER');
 
   const defaults = {
     agent_enabled: 'true',
@@ -226,6 +326,7 @@ export function initDb() {
     max_mcap_usd: '0',
     min_gmgn_total_fee_sol: '0',
     min_graduated_volume_usd: '0',
+    min_holder_velocity: '0',
     max_top20_holder_percent: '100',
     min_saved_wallet_holders: '0',
     gmgn_request_delay_ms: process.env.GMGN_REQUEST_DELAY_MS || '2500',
@@ -258,6 +359,7 @@ export function initDb() {
     min_fee_claim_sol: 0.5,
     min_gmgn_total_fee_sol: 10,
     min_holders: 0,
+    min_holder_velocity: 0,
     max_top20_holder_percent: 100,
     min_saved_wallet_holders: 0,
     max_ath_distance_pct: 0,
@@ -268,19 +370,23 @@ export function initDb() {
     trending_max_bundler_rate: 0.5,
     position_size_sol: 0.1,
     max_open_positions: 3,
-    tp_percent: 50,
+    tp_percent: 150,
     sl_percent: -25,
     trailing_enabled: true,
     trailing_percent: 20,
-    partial_tp: false,
-    partial_tp_at_percent: 0,
-    partial_tp_sell_percent: 0,
+    partial_tp: true,
+    partial_tp_at_percent: 150,
+    partial_tp_sell_percent: 25,
+    tp_stages: [
+      { trigger_percent: 150, sell_percent: 25 },
+      { trigger_percent: 300, sell_percent: 25 },
+    ],
     max_hold_ms: 0,
     use_llm: true,
     llm_min_confidence: 50,
   }), ts);
 
-  stratInsert.run('dip_buy', 'Dip Buy', 0, JSON.stringify({
+  stratInsert.run('dip_buy', 'Dip Buy', 1, JSON.stringify({
     entry_mode: 'wait_for_dip',
     min_source_count: 1,
     require_fee_claim: false,
@@ -290,6 +396,7 @@ export function initDb() {
     min_fee_claim_sol: 0,
     min_gmgn_total_fee_sol: 0,
     min_holders: 0,
+    min_holder_velocity: 0,
     max_top20_holder_percent: 100,
     min_saved_wallet_holders: 0,
     max_ath_distance_pct: -40,
@@ -300,19 +407,23 @@ export function initDb() {
     trending_max_bundler_rate: 0.5,
     position_size_sol: 0.05,
     max_open_positions: 3,
-    tp_percent: 30,
+    tp_percent: 80,
     sl_percent: -20,
     trailing_enabled: true,
     trailing_percent: 15,
-    partial_tp: false,
-    partial_tp_at_percent: 0,
-    partial_tp_sell_percent: 0,
+    partial_tp: true,
+    partial_tp_at_percent: 80,
+    partial_tp_sell_percent: 30,
+    tp_stages: [
+      { trigger_percent: 80, sell_percent: 30 },
+      { trigger_percent: 150, sell_percent: 30 },
+    ],
     max_hold_ms: 0,
     use_llm: true,
     llm_min_confidence: 60,
   }), ts);
 
-  stratInsert.run('smart_money', 'Smart Money', 0, JSON.stringify({
+  stratInsert.run('smart_money', 'Smart Money', 1, JSON.stringify({
     entry_mode: 'immediate',
     min_source_count: 2,
     require_fee_claim: false,
@@ -322,6 +433,7 @@ export function initDb() {
     min_fee_claim_sol: 0,
     min_gmgn_total_fee_sol: 0,
     min_holders: 1000,
+    min_holder_velocity: 0,
     max_top20_holder_percent: 50,
     min_saved_wallet_holders: 0,
     max_ath_distance_pct: 0,
@@ -332,19 +444,23 @@ export function initDb() {
     trending_max_bundler_rate: 0.3,
     position_size_sol: 0.1,
     max_open_positions: 3,
-    tp_percent: 100,
+    tp_percent: 150,
     sl_percent: -25,
-    trailing_enabled: false,
-    trailing_percent: 0,
+    trailing_enabled: true,
+    trailing_percent: 25,
     partial_tp: true,
-    partial_tp_at_percent: 100,
-    partial_tp_sell_percent: 50,
+    partial_tp_at_percent: 150,
+    partial_tp_sell_percent: 20,
+    tp_stages: [
+      { trigger_percent: 150, sell_percent: 20 },
+      { trigger_percent: 400, sell_percent: 25 },
+    ],
     max_hold_ms: 0,
     use_llm: true,
     llm_min_confidence: 70,
   }), ts);
 
-  stratInsert.run('degen', 'Degen', 0, JSON.stringify({
+  stratInsert.run('degen', 'Degen', 1, JSON.stringify({
     entry_mode: 'immediate',
     min_source_count: 1,
     require_fee_claim: false,
@@ -354,6 +470,7 @@ export function initDb() {
     min_fee_claim_sol: 0,
     min_gmgn_total_fee_sol: 0,
     min_holders: 0,
+    min_holder_velocity: 0,
     max_top20_holder_percent: 100,
     min_saved_wallet_holders: 0,
     max_ath_distance_pct: 0,
@@ -364,17 +481,89 @@ export function initDb() {
     trending_max_bundler_rate: 0.7,
     position_size_sol: 0.05,
     max_open_positions: 5,
-    tp_percent: 30,
+    tp_percent: 80,
     sl_percent: -15,
     trailing_enabled: true,
     trailing_percent: 10,
-    partial_tp: false,
-    partial_tp_at_percent: 0,
-    partial_tp_sell_percent: 0,
+    partial_tp: true,
+    partial_tp_at_percent: 80,
+    partial_tp_sell_percent: 40,
+    tp_stages: [
+      { trigger_percent: 80, sell_percent: 40 },
+      { trigger_percent: 200, sell_percent: 30 },
+    ],
     max_hold_ms: 0,
     use_llm: false,
     llm_min_confidence: 0,
   }), ts);
+
+  db.prepare('UPDATE strategies SET enabled = 1 WHERE id IN (?, ?, ?, ?)').run('sniper', 'dip_buy', 'smart_money', 'degen');
+  const strategyTpUpdates = {
+    sniper: {
+      min_holder_velocity: 0,
+      tp_percent: 150,
+      trailing_enabled: true,
+      trailing_percent: 20,
+      partial_tp: true,
+      partial_tp_at_percent: 150,
+      partial_tp_sell_percent: 25,
+      tp_stages: [
+        { trigger_percent: 150, sell_percent: 25 },
+        { trigger_percent: 300, sell_percent: 25 },
+      ],
+    },
+    dip_buy: {
+      min_holder_velocity: 0,
+      tp_percent: 80,
+      trailing_enabled: true,
+      trailing_percent: 15,
+      partial_tp: true,
+      partial_tp_at_percent: 80,
+      partial_tp_sell_percent: 30,
+      tp_stages: [
+        { trigger_percent: 80, sell_percent: 30 },
+        { trigger_percent: 150, sell_percent: 30 },
+      ],
+    },
+    smart_money: {
+      min_holder_velocity: 0,
+      tp_percent: 150,
+      trailing_enabled: true,
+      trailing_percent: 25,
+      partial_tp: true,
+      partial_tp_at_percent: 150,
+      partial_tp_sell_percent: 20,
+      tp_stages: [
+        { trigger_percent: 150, sell_percent: 20 },
+        { trigger_percent: 400, sell_percent: 25 },
+      ],
+    },
+    degen: {
+      min_holder_velocity: 0,
+      tp_percent: 80,
+      trailing_enabled: true,
+      trailing_percent: 10,
+      partial_tp: true,
+      partial_tp_at_percent: 80,
+      partial_tp_sell_percent: 40,
+      tp_stages: [
+        { trigger_percent: 80, sell_percent: 40 },
+        { trigger_percent: 200, sell_percent: 30 },
+      ],
+    },
+  };
+  const strategyUpdate = db.prepare('UPDATE strategies SET config_json = ? WHERE id = ?');
+  for (const [id, update] of Object.entries(strategyTpUpdates)) {
+    const row = db.prepare('SELECT config_json FROM strategies WHERE id = ?').get(id);
+    if (row) strategyUpdate.run(JSON.stringify({ ...JSON.parse(row.config_json), ...update }), id);
+  }
+  db.prepare(`
+    UPDATE dry_run_positions
+    SET initial_size_sol = COALESCE(initial_size_sol, size_sol),
+        realized_pnl_sol = COALESCE(realized_pnl_sol, 0),
+        remaining_fraction = COALESCE(remaining_fraction, 1),
+        tp_stage_index = COALESCE(tp_stage_index, 0)
+  `).run();
 }
 
 export function ensureColumn(table, column, ddl) {
